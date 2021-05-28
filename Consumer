@@ -1,0 +1,70 @@
+from kafka import KafkaConsumer
+from json import loads, dumps
+import requests
+import threading
+from time import sleep
+import psycopg2
+
+conn = psycopg2.connect(database="inv", user="sophia", password="my_password", host="127.0.0.1", port="5432")
+cur = conn.cursor()
+
+class StreamTwitter:
+    def __init__(
+            self, subreddit, limit=50, author=True,
+            comments=False, url=True, name=False,
+            num_comments=False, score=False,
+            title=True, created_utc=False, edited=False,
+            spoiler=False
+    ):
+
+        self.args = locals()
+        del self.args['self']
+
+    def send_data(self):
+        print("send data")
+        r = requests.post("http://127.0.0.1:5000",
+                          data = dumps(self.args).encode('utf-8'))
+        print('done sending data')
+        return r.status_code
+
+    def get_stream(self):
+        consumer = KafkaConsumer(
+            bootstrap_servers = ['localhost:9092'],
+            auto_offset_reset = 'latest', #change to 'earliest' for getting a stream of historical data as well
+            enable_auto_commit = True,
+            value_deserializer = lambda x : loads(x.decode('utf-8'))
+        )
+
+        consumer.subscribe(['btc_twitter_stream'])
+
+        count = 0
+
+        for message in consumer:
+            # print('received message')
+            print(message.value)
+            cur.execute("""
+                insert into cnbc_test1 (
+                    id,
+                    title,
+                    url,
+                    date
+                )
+
+                values (""" +
+                    str(message.value['id']) + ',' +
+                    str(message.value['title']) + ',' +
+                    str(message.value['url']) + ',' +
+                    str(message.value['date']) +
+                ')'
+
+                conn.commit()
+
+
+stream = StreamTwitter("Gamestop", comments = False, limit=20, num_comments = "True")
+
+
+stream_thread = threading.Thread(target = stream.get_stream)
+stream_thread.start()
+
+stream_thread.join()
+conn.close()
